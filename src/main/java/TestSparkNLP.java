@@ -3,26 +3,74 @@ import com.johnsnowlabs.nlp.Finisher;
 import com.johnsnowlabs.nlp.annotators.Tokenizer;
 import com.johnsnowlabs.nlp.annotators.pos.perceptron.PerceptronModel;
 import com.johnsnowlabs.nlp.annotators.sentence_detector_dl.SentenceDetectorDLModel;
+import com.johnsnowlabs.nlp.pretrained.PretrainedPipeline;
 import org.apache.spark.ml.Pipeline;
 import org.apache.spark.ml.PipelineStage;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Encoders;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
+import scala.collection.Seq;
+import scala.collection.immutable.Map;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.apache.spark.sql.functions.input_file_name;
+import static org.apache.spark.sql.functions.split;
+
 public class TestSparkNLP {
 
-	public static void main(String[] args) {
-
+	public static void main(String[] args) throws IOException {
 		final SparkSession spark = SparkSession
 			.builder()
 			.appName("SparkNLP")
 			.master("local[*]")
 			.getOrCreate();
 
+		final Dataset<Row> textFiles = spark.read()
+			.format("text")
+			.option("recursiveFileLookup", "true")
+			.option("wholetext", "true")
+			.load("spark/data/mini_newsgroups")
+			// TIP: https://www.youtube.com/watch?v=7jxFffeQHpQ
+			.withColumnRenamed("value", "text")
+			.withColumn("filename", input_file_name());
+
+		textFiles.show(5, 120, true);
+
+		final String[] parts = ("file://" + new File("spark/data").getCanonicalPath()).split("/");
+
+		final Dataset<Row> textFiles3Col = textFiles
+			.withColumn("newsgroup",
+				split(textFiles.col("filename"), "/").getItem(parts.length + 1));
+
+		System.out.println("textFiles.count() = " + textFiles3Col.count());
+
+		textFiles3Col.show(5, 120, true);
+
+		final Dataset<Row> groupByNewsgroup = textFiles3Col.groupBy("newsgroup").count();
+		groupByNewsgroup.show(5);
+
+		final PretrainedPipeline pipeline = PretrainedPipeline.fromDisk("spark/models/explain_document_ml_en_4.0.0_3.0_1656066222624");
+		final Dataset<Row> transform = pipeline.transform(textFiles);
+		transform.printSchema();
+
+		//englishPipeline();
+		//persianPipeline(spark);
+
+		spark.close();
+	}
+
+	static void englishPipeline() {
+		final PretrainedPipeline pipeline = PretrainedPipeline.fromDisk("spark/models/explain_document_ml_en_4.0.0_3.0_1656066222624");
+		final Map<String, Seq<String>> annotate = pipeline.annotate("Hellu wrold!");
+		System.out.println("annotate = " + annotate);
+	}
+
+	static void persianPipeline(SparkSession spark) {
 		//PretrainedPipeline.fromDisk("spark/models/recognize_entities_dl_fa_4.0.0_3.0_1656494752817");
 
 		// TIP: https://stackoverflow.com/questions/43633696/dataframe-from-liststring-in-java
@@ -63,9 +111,9 @@ public class TestSparkNLP {
 				System.out.printf("\t%s = %s\n", p, t);
 			}
 		}
-
-		spark.close();
 	}
+
+	// ------------------------------
 
 	static DocumentAssembler documentAssembler(String in, String out) {
 		final DocumentAssembler documentAssembler = new DocumentAssembler();
